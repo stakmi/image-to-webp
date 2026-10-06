@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python }}, ${{ matrix.extras }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        extras: [all]
+        include:
+          # Core install only (Pillow): optional plugins must degrade gracefully.
+          - os: ubuntu-latest
+            python: "3.12"
+            extras: core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install cairo (SVG support)
+        if: matrix.extras == 'all'
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get update && sudo apt-get install -y libcairo2; else brew install cairo; fi
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          if [ "${{ matrix.extras }}" = "all" ]; then
+            python -m pip install -e ".[all,test]"
+          else
+            python -m pip install -e ".[test]"
+          fi
+      - name: Plugin status
+        run: image-to-webp --list-formats
+      - name: Run tests
+        run: python -m pytest
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check --strict dist/*
+      - name: Smoke-test the wheel
+        run: |
+          python -m venv /tmp/wheel-env
+          /tmp/wheel-env/bin/pip install dist/*.whl
+          cd /tmp && /tmp/wheel-env/bin/python -c "import image_to_webp, sys; print(image_to_webp.__version__)"
+          /tmp/wheel-env/bin/image-to-webp --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
